@@ -37,18 +37,14 @@ volumes:
   而且没有任何报错。这是这个镜像唯一一个不设就会静默算错的地方。
 </Note>
 
-## 数据
+## 不想要数据卷？想挂在自己指定目录下？
 
-数据库和主题目录都在 `/data`，也就是二进制部署里 `/opt/monitor/data` 的那一份。
-
-从二进制部署迁过来、备份脚本盯着固定路径、或者数据要落在别的盘上，才需要挂主机目录代替
-named volume；其余情况上面那份 compose 就够了。这么挂的话先把属主改对，容器以 uid 65534
-运行，而镜像里没有 shell，`mkdir` 和 `chown` 在容器内都做不了：
+挂之前先把属主改对：容器以 uid 65534 运行，属主不对就写不进去。目录换成自己想要的路径即可。
 
 ```bash
-sudo mkdir -p /srv/monitor && sudo chown 65534:65534 /srv/monitor
+sudo mkdir -p /opt/monitor && sudo chown 65534:65534 /opt/monitor
 docker run -d --name monitor -p 127.0.0.1:28080:28080 \
-  -v /srv/monitor:/data -e TZ=Asia/Shanghai stqfdyr/monitor
+  -v /opt/monitor:/data -e TZ=Asia/Shanghai stqfdyr/monitor
 ```
 
 ## 容器里为什么绑通配符
