@@ -1,9 +1,5 @@
 一键脚本装出来的 hub 只监听 `127.0.0.1`，公网访问不到，域名由反向代理指过来。
 
-配好之后 hub 的参数一个都不用改。面板用浏览器地址栏里的地址拼安装命令，所以从
-`https://hub.example.com` 进后台，添加节点时拿到的就是 `--server https://hub.example.com`；
-会话 cookie 的 `Secure` 跟着请求的 `X-Forwarded-Proto` 走。
-
 ## caddy
 
 证书、`X-Forwarded-Proto`、WebSocket 都自动处理，一行就够：
