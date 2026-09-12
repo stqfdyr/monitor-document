@@ -1,5 +1,5 @@
 ```bash
-docker run -d --name monitor -p 28080:28080 \
+docker run -d --name monitor -p 127.0.0.1:28080:28080 \
   -v monitor-data:/data -e TZ=Asia/Shanghai \
   stqfdyr/monitor
 ```
@@ -47,14 +47,6 @@ docker run -d --name monitor -p 127.0.0.1:28080:28080 \
   -v /opt/monitor:/data -e TZ=Asia/Shanghai stqfdyr/monitor
 ```
 
-## 容器里为什么绑通配符
-
-镜像的 `ENTRYPOINT` 不带 `--listen`，用的是二进制自己的默认值 `[::]:28080`——容器里绑回环的话
-`-p` 就映射不进去。
-
-对外的那道闸交给 `-p`：写 `127.0.0.1:28080:28080` 而不是 `28080:28080`，效果和一键脚本装出来的
-一样，端口只在本机可达，公网要经过反代。
-
 ## 升级
 
 ```bash
@@ -62,7 +54,7 @@ docker pull stqfdyr/monitor
 docker rm -f monitor && docker run -d ...   # 同一条命令，数据在 volume 里
 ```
 
-## agent 没有镜像
+## agent 不支持 docker 部署
 
 agent 是一个无运行时依赖、常驻几 MiB 的静态二进制，而它要装的地方通常是资源最少的那批 VPS，
 为它引入一整套容器运行时并不划算。
