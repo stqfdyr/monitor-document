@@ -1,0 +1,62 @@
+## 1. 装 hub
+
+### 方式 1：一键脚本
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/monitor-probe/monitor/main/install-hub.sh -o install-hub.sh
+chmod +x install-hub.sh
+sudo ./install-hub.sh
+```
+
+有终端时脚本给出一个菜单（安装 / 升级、卸载、状态、日志）；`curl ... | sh` 读不到回答，直接按默认值安装。
+参数与目录结构见[安装 hub](/install/hub)。
+
+### 方式 2：Docker
+
+```bash
+docker run -d --name monitor -p 127.0.0.1:28080:28080 \
+  -v monitor-data:/data -e TZ=Asia/Shanghai \
+  stqfdyr/monitor
+```
+
+`TZ` 要设成 hub 所在的时区，不设按 UTC 算日流量和账单周期。compose 写法见
+[Docker 部署](/install/docker)。
+
+### 取应急密码
+
+装完打印一次性的应急密码，记下来。事后也能找回：
+
+```bash
+journalctl -u monitor-hub | grep Emergency     # 一键脚本
+docker logs monitor | grep Emergency           # Docker
+```
+
+<Note warn>
+  这时候面板还打不开。hub 只在本机监听，公网访问不到，这是有意的。下一步把域名指过来。
+</Note>
+
+## 2. 配反向代理
+
+caddy 一行就够：
+
+```caddyfile
+hub.example.com {
+    reverse_proxy 127.0.0.1:28080
+}
+```
+
+nginx 与 Cloudflare 隧道的完整配置，以及四个需要注意的问题，见
+[反向代理](/install/reverse-proxy)。
+
+配好之后 hub 的参数一个都不用改：面板用浏览器地址栏里的地址拼安装命令，域名通了就全对了。
+
+## 3. 进面板
+
+打开 `https://hub.example.com/admin`，用第 1 步的应急密码登录。
+
+**安全**页可以把应急密码改掉，也可以另外配一套 GitHub 单点登录；只用密码登录同样完整可用。
+两条通道的配置与排查见[登录与安全](/config/auth)。
+
+**设置**页填站点名称，决定公开状态页开不开。
+
+节点的接入见[接入节点](/install/agent)。

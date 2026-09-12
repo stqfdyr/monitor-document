@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN" class="scroll-smooth">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>monitor — 服务器探针文档</title>
+    <meta name="description" content="monitor 是一个用 Rust 写的服务器探针：单二进制、常驻数 MB 内存、默认只监听回环。安全、极简、高效。" />
+    <script>
+      // Before first paint: a class change after hydration produces a white flash
+      // on every navigation for dark-theme readers.
+      try {
+        var t = localStorage.getItem("theme")
+        if (t === "dark" || (!t && matchMedia("(prefers-color-scheme: dark)").matches))
+          document.documentElement.classList.add("dark")
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"><!--app-html--></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

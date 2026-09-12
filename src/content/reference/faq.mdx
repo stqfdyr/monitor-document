@@ -1,0 +1,170 @@
+## 装完面板打不开
+
+这是正常的。一键脚本装出来的 hub 只监听 `127.0.0.1`，公网访问不到。
+
+配一段[反向代理](/install/reverse-proxy)把域名指过来，caddy 只要一行。
+
+## 应急密码丢了
+
+```bash
+journalctl -u monitor-hub | grep Emergency     # 二进制部署
+docker logs monitor | grep Emergency           # 容器部署
+```
+
+它只在首次启动时打印一次，但日志里一直在。
+
+## 节点一直不上线
+
+按这个顺序查：
+
+```bash
+# 1. agent 在跑吗
+systemctl status monitor-agent          # 或 rc-service monitor-agent status
+
+# 2. 它在抱怨什么
+journalctl -u monitor-agent -n 50 --no-pager
+
+# 3. 这台机器连得上 hub 吗
+curl -sI https://hub.example.com/install.sh | head -1
+```
+
+常见原因：
+
+| 现象 | 原因 |
+|---|---|
+| agent 日志里 401 | token 被换发过。回面板重新拿一条安装命令，重跑 |
+| agent 日志里连接被拒 / 超时 | 反代没转发 WebSocket 升级头，或者 hub 和节点的 IP 协议族对不上 |
+| agent 根本没起来 | 服务定义里的地址是明文 `http://`，而 agent 拒绝明文连远程 hub |
+| agent 日志里 `UnknownIssuer` | hub 的证书不是公共 CA 签的，见下一条 |
+
+## agent 报 invalid peer certificate: UnknownIssuer
+
+hub 用的是自签证书或私有 CA 签的证书。**agent 只认编译进去的那份公共根证书列表，不读系统信任库**，
+所以把 CA 装进 `/usr/local/share/ca-certificates` 再 `update-ca-certificates` 对它没有用——同一台
+机器上 `curl` 和 `install.sh` 都正常，只有 agent 连不上，日志里每隔几秒一条 `UnknownIssuer`。
+
+给 hub 换一张公共 CA 的证书（Let's Encrypt 或者 Cloudflare 的边缘证书都行）。内网部署实在没有域名
+的，另一条路是让 agent 走回环或 `--insecure` 的明文，代价写在[接入节点](/install/agent)里。
+
+## 节点周期性掉线又自己回来
+
+反代的读写超时太短。`/api/agent/ws` 是长连接，把 `proxy_read_timeout` 和 `proxy_send_timeout`
+放到 1 小时，关掉 `proxy_buffering`，再确认转发了 `Upgrade` 和 `Connection` 头。
+
+## 判定离线要多久
+
+最慢 150 秒。hub 每 30 秒发一个 WebSocket Ping，连续 120 秒收不到任何入站帧就主动断开。
+
+这个窗口不能再短：网络抖一下就断连的话，agent 重连的开销比多等一会儿大。
+
+## 纯 IPv6 的机器装不上
+
+装得上。agent 二进制总是由 hub 转发（`<hub>/agent/<arch>`），节点不需要能连上 GitHub。
+
+真正的约束是节点必须能到达 hub。hub 只有 IPv4 而节点只有 IPv6 时，给 hub 加一个 v6 入口即可，
+下面三条路都不用改代码：
+
+- 机器申请一个 v6 地址（多数 VPS 免费给一个 `/64`）
+- 套一个双栈 CDN
+- 用 Cloudflare 隧道。隧道是出站建立的，源站纯 v4 也能有双栈边缘
+
+## hub 自己连不上 GitHub
+
+在**设置 → GitHub 代理**填一个镜像地址，hub 拉 release 时会用它。节点侧什么都不用改。
+
+<Note warn>
+  这个地址返回的字节会被装到每一台节点上并以 root 跑起来，hub 原样转发，`install.sh` 直接安装，
+  全链路没有签名也没有摘要校验。留空直连是默认值，只有 hub 自己拉不到 GitHub 时才需要填，
+  而且只填信得过的镜像。设置只接受 `https://`。
+</Note>
+
+## 面板里没有「添加节点」
+
+从 IP 地址或明文 HTTP 进面板时，添加节点、批量窗口和安装命令都不可用：那条链路上 token 是明文
+传的，而下载的二进制接着要以 root 跑起来。
+
+配好域名和 TLS，从 HTTPS 域名进面板，这些入口会自己出现。`--site` 不能绕过这个限制。
+
+## 内存和硬盘的数字和别的面板不一样
+
+面板的数字对齐 `free(1)` 和 `df(1)`，ssh 上去敲一遍就能核对。
+
+常见的差异来源是内存：很多采集库把 page cache 算成已用内存，于是一台跑了几天的机器看起来内存
+快满了。这里用的是 `MemTotal - MemAvailable`，和 `free` 的 used 列同一个算法。
+
+对照基准换成 htop 会有几 MiB 到几十 MiB 的差，两条公式回答的不是同一个问题，详见
+[设计哲学](/guide/philosophy)。
+
+## 总流量为什么和商家算的不一样
+
+几个已知的差异来源：
+
+- agent 上线之前跑的量算不进来，hub 只计入它亲眼看着计数器涨过去的那部分
+- VPS 重启那一次会丢掉开机到首次上报之间的量，通常几十秒、几百 KB
+- 商家的重置日和面板里填的不一致，比对的就不是同一个周期
+- 计费方向不一致，面板的「流量计算方式」要和商家一致（上下行相加 / 取大 / 只算单向）
+
+反过来，agent 掉线期间的流量会被补上，那是有意的：内核照样在计数，流量确实跑了。
+
+## 今日流量到点不归零
+
+Docker 部署没设 `TZ`。日边界和账单周期走本地时区，不设按 UTC 算，而且没有任何报错。
+
+```bash
+docker run -d -e TZ=Asia/Shanghai ...
+```
+
+## 改小保留天数会丢流量数据吗
+
+不会。保留天数只删每分钟一行的历史明细和探测记录，累计流量是独立存的，不是从明细算出来的。
+
+图表会变短，流量数字不受影响。
+
+## 搬到另一台机器
+
+```bash
+# 旧机器：停服务，复制整个数据目录
+systemctl stop monitor-hub
+tar czf monitor-data.tar.gz -C /opt/monitor data
+
+# 新机器：先按快速开始装一遍 hub，再把数据放回去
+sudo ./install-hub.sh
+systemctl stop monitor-hub
+tar xzf monitor-data.tar.gz -C /opt/monitor
+chown -R monitor:monitor /opt/monitor/data
+systemctl start monitor-hub
+```
+
+域名指过来之后所有 agent 会自己重连，它们连的是域名不是 IP。换了域名的话，每台节点都要重跑一遍
+安装命令。
+
+## 数据库越来越大
+
+用**数据 → 回收空间**：清过期明细 + `VACUUM` + 截断 WAL。
+
+WAL 模式下不截断的话文件只会变大不会变小，所以这三步是一套。需要和数据库等量的空闲磁盘。
+
+## 主题详情页刷新就 404
+
+反代或 WAF 做了按路径的正向白名单，而详情页的前缀没放行。
+
+从列表点进去只是 pushState，边缘看不见，刷新才会真的请求那个路径。默认主题用的是 `/node/{id}`。
+
+## 怎么升级
+
+hub 重跑一遍安装脚本：校验通过才替换，起不来自动回滚，没写的参数沿用上次的。
+
+agent 重跑一遍它的安装命令。没有自动更新，因为自更新意味着 agent 能以 root 下载并执行任意二进制。
+
+主题点卡片上的 ⟳。
+
+## 支持 Windows / macOS 吗
+
+不支持，也不会支持。agent 直接读 `/proc` 和 `statvfs`，换来的是更准的数字和更小的二进制，
+加跨平台等于推翻整个采集实现。
+
+## 能加告警 / WebSSH / 插件吗
+
+不能，而且不是排期靠后，理由见[设计哲学](/guide/philosophy)。
+
+探针的职责是报告机器的状态，不是代管机器。其中任何一样是刚需，这个项目就不适合。

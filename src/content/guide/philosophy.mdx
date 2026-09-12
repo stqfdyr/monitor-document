@@ -1,0 +1,91 @@
+## 安全
+
+### 装 agent 不扩大被监控机器的攻击面
+
+- **不监听任何端口。** 连接由 agent 主动向 hub 发起，目标机器不必开端口，也不必改防火墙
+- **不写任何文件。** 只读 `/proc`、`/etc/os-release` 和 `statvfs`，没有配置文件、数据库或缓存。
+  累加流量、识别重启这些有状态的事都在 hub 侧
+- **不执行任何来自 hub 的东西。** hub 下发的只有 TCP 探测任务（`host:port` 和间隔），没有一条
+  指令能让 agent 运行命令或写文件
+- **不自动更新。** 自更新等于让 agent 有权以 root 下载并执行任意二进制。升级是重跑一遍安装命令
+
+### 最小权限运行
+
+systemd 单元不是只写一行 `ExecStart`：
+
+| | agent | hub |
+|---|---|---|
+| 身份 | `DynamicUser`，每次启动一个临时 uid | 专用系统用户 `monitor` |
+| 文件系统 | `ProtectSystem=strict` + `ProtectHome`，全盘只读 | 同上，另加 `ReadWritePaths` 只开 `data/` |
+| 提权 | `NoNewPrivileges` | `NoNewPrivileges` |
+| 隔离 | `PrivateTmp`、`PrivateDevices` | `PrivateTmp`、`PrivateDevices` |
+| 网络 | `RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK` | `AF_INET AF_INET6` |
+| 内存 | `MemoryMax=64M` | `MemoryMax=256M` |
+
+hub 因此连自己的二进制都改不了：可写的只有数据库和主题所在的那一个目录。
+
+节点 token 写在 `/opt/monitor/agent.env`，权限 `0600`，不写进服务定义——那些内容会出现在
+`systemctl cat` 和日志里。
+
+<Note warn>
+  OpenRC 上 agent 以 root 运行。`DynamicUser` 是 systemd 白送的降权，OpenRC 没有对应开关，
+  两边等价的只有自动重启和 token 的存放方式。
+</Note>
+
+### 凭证的边界
+
+- 节点 token 是 256 位随机值，走 `Authorization: Bearer` 头而不是 URL query——query 会进反代的
+  access log。它只能上报自己那一个节点，读不到别的节点，也改不了任何设置
+- 换发 token 立刻生效，包括已经连着的那条连接
+- 会话是 256 位随机 token，数据库里只存 sha256，14 天过期。cookie 带 `HttpOnly` 与
+  `SameSite=Lax`，HTTPS 下加 `Secure`
+- 面板的每个 handler 在参数里带一个 `Admin` 提取器，框架在进入函数体之前校验会话，所以不会写漏
+- 应急密码用 argon2id 存。登录限流是同一地址 15 分钟 5 次失败锁死，另有一道并发闸门，
+  同一时刻只允许一次密码校验
+
+### 装完，面板不在公网上
+
+一键脚本写死 `--listen 127.0.0.1`。装完那一刻面板打不开，要先配一段反向代理。
+
+这是最容易被当成 bug 的一条，而代价很实在：明文 HTTP 上，会话 cookie 和节点 token 在链路上都是明文，
+中间人还能替换掉安装命令下载的那个二进制，而它接着会以 root 跑起来。所以 agent 和 `install.sh`
+一律拒绝明文连远程 hub。
+
+[反向代理](/install/reverse-proxy)那一页有三种配法，抄就行。
+
+## 极简
+
+### 零配置文件
+
+hub 只有四个命令行参数：`--listen`、`--db`、`--themes`、`--site`。其余全部存在 SQLite 里，在面板改。
+
+少一个 TOML 解析器，也少了「配置文件在哪、权限对不对、和数据库同不同步」这一类问题。
+
+### 不做的功能
+
+| 不做 | 原因 |
+|---|---|
+| 通知与告警 | 探针的输出是数据，告警是另一个系统的事 |
+| 远程 SSH / web terminal | 只读的观察者被攻破，和能执行命令的工具被攻破，代价差一个数量级 |
+| 插件系统 | 等于把第三方代码请进 hub 的进程 |
+| ICMP / HTTP 探测 | TCP 一种够用，三种要三套超时语义、三套图例 |
+| agent 自动更新 | 自更新意味着 agent 能以 root 下载并执行任意二进制 |
+| 跨平台 agent | 加 Windows / macOS 等于推翻整个采集实现 |
+
+这些不是排期靠后，是不会做。探针的职责是报告机器的状态，不是代管机器。没写的代码不占内存，
+也不会有漏洞。
+
+## 高效
+
+同一台机器、同一套负载的实测数字，完整数据在[性能](/reference/performance)：
+
+| | |
+|---|---|
+| 可执行文件 | 6.0 MiB |
+| 冷启动到能响应请求 | 63 ms |
+| 空转内存 | 6.1 MiB |
+| 200 个节点在线，每 2 秒上报 | 8.4 MiB，一颗核的 2.5% |
+| 每秒 1000 次上报 | 8.6 MiB |
+
+Rust 没有 GC 也没有语言运行时，负载上去内存基本不动。但光换语言只拿得到体积和内存的优势，
+响应速度是一处一处调出来的，那几处改动记在同一页里。

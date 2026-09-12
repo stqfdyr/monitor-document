@@ -1,0 +1,136 @@
+把下面这段整个复制给一个能执行命令的 AI 助手（Claude Code、Codex，或者任何接了终端的 agent），
+它会照着把 hub 装好、反代配好、第一个节点接进来。也可以直接把 [`llms.txt`](/llms.txt) 这个地址
+交给它自己读，内容一样，纯文本。
+
+<Note warn>
+  让 AI 在服务器上以 root 执行命令是有风险的。这段提示词要求它每一步先说明意图、改动前先备份、
+  不确定就停下来问，但为结果负责的仍然是你。执行前看一眼命令，别让它碰还没读懂的生产环境。
+</Note>
+
+## 提示词
+
+```text
+你要在一台 Linux 服务器上部署 monitor，一个 Rust 写的服务器探针。
+文档：https://monitor-document.pages.dev/
+
+## 你要知道的前提
+
+- monitor 由三部分组成：hub（面板 + API，装在一台机器上）、agent（装在每台被监控的
+  机器上）、主题（公开状态页的皮肤，默认已内置）。
+- hub 是单个 Rust 二进制加一个 SQLite 文件。零配置文件，所有设置存在数据库里。
+- 一键脚本装出来的 hub **只监听 127.0.0.1**，这是刻意的安全设计，不要试图改成
+  0.0.0.0 或者去开防火墙端口。正确做法是配一个反向代理，用 HTTPS 域名访问。
+- agent 只支持 Linux（systemd 或 OpenRC），不提供 Docker 镜像，这也是刻意的。
+- 从 IP 地址或明文 HTTP 进面板时，添加节点和生成安装命令的入口会被禁用。
+  必须先配好域名和 TLS。
+
+## 执行规则
+
+1. 每一步执行前先说清楚你要做什么、为什么，等我确认。
+2. 修改任何已有配置文件（nginx、caddy、systemd 单元）之前，先备份原文件。
+3. 不要 apt upgrade，不要动我系统上与本次部署无关的任何东西。
+4. 遇到不确定的（端口被占、已有反代配置冲突、域名没解析过来）就停下来问，不要猜。
+5. 每一步做完给我看验证结果，不要只说"完成了"。
+
+## 步骤
+
+### 第一步：环境检查
+- 确认是 Linux，确认有 systemd 或 OpenRC，确认有 root。
+- 确认 curl 存在。
+- 确认 28080 端口没被占用（ss -tulpn | grep -F :28080）。占用了就问我换哪个端口。
+- 问我域名是什么，并确认它已经解析到这台机器。
+
+### 第二步：装 hub
+    curl -fsSL https://raw.githubusercontent.com/monitor-probe/monitor/main/install-hub.sh -o install-hub.sh
+    chmod +x install-hub.sh
+    sudo ./install-hub.sh --yes
+装完从日志里取出一次性应急密码给我：
+    journalctl -u monitor-hub | grep Emergency
+确认服务在跑：systemctl status monitor-hub
+
+### 第三步：配反向代理
+先看这台机器上已经有什么（nginx / caddy / cloudflared），有就用现成的，没有就问我装哪个。
+
+caddy（最省事），在 Caddyfile 里加：
+    hub.example.com {
+        reverse_proxy 127.0.0.1:28080
+    }
+
+nginx，站点配置里必须包含这几项，一项都不能少：
+    map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+    server {
+        listen 443 ssl;
+        listen [::]:443 ssl;
+        server_name hub.example.com;
+        ssl_certificate     /etc/letsencrypt/live/hub.example.com/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/hub.example.com/privkey.pem;
+        location / {
+            proxy_pass http://127.0.0.1:28080;
+            proxy_http_version 1.1;
+            client_max_body_size 8m;
+            proxy_set_header Host              $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header Upgrade    $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_buffering off;
+            proxy_read_timeout  1h;
+            proxy_send_timeout  1h;
+        }
+    }
+证书没有就用 certbot 申请，申请前先确认 80 端口能通。
+
+Cloudflare 隧道，ingress 指向 http://127.0.0.1:28080 即可，不需要开任何入站端口。
+
+下面四件事一件都不能漏，漏了的症状都是静默的：
+- 转发 Upgrade / Connection 头，关掉缓冲，超时放到 1 小时。漏了节点会周期性掉线
+- client_max_body_size 设 8m。漏了导入备份和上传主题会被反代 413 掉
+- 透传 X-Forwarded-Proto。漏了会话 cookie 拿不到 Secure
+- 透传 X-Forwarded-For。漏了登录限流按代理地址计数，所有人共用一个桶
+
+### 第四步：验证
+    curl -sI https://hub.example.com/admin | head -1        # 期望 200
+    curl -sI -o /dev/null -w '%{http_code}\n' \
+      -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+      -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+      https://hub.example.com/api/ws                        # 期望 101
+两条都对了再往下走。
+
+### 第五步：告诉我接下来手动做什么
+你不要替我做这几件事，只把清单给我：
+1. 打开 https://hub.example.com/admin，用应急密码登录
+2. 「安全」页配置 GitHub OAuth（回调必须精确填
+   https://hub.example.com/api/auth/github/callback），
+   把我的 GitHub 用户名填进白名单（留空 = 拒绝所有人），然后改掉应急密码
+3. 「节点」页添加节点，点下载按钮拿到安装命令
+
+### 第六步：如果我给了你节点的安装命令
+在目标机器上以 root 执行它，然后：
+- systemctl status monitor-agent 确认在跑
+- journalctl -u monitor-agent -n 30 看有没有报错
+- 告诉我面板里这个节点几秒后应该就亮了
+
+## 排查速查
+
+节点不上线      → 先看 journalctl -u monitor-agent。401 = token 被换发过，
+                  重新拿命令；连接超时 = 反代没转发 WebSocket 升级头
+周期性掉线      → 反代读写超时太短，或者没关 proxy_buffering
+面板没有"添加节点" → 你是从 IP 或明文 HTTP 进的，必须用 HTTPS 域名
+导入备份 413    → 反代的 client_max_body_size 没设到 8m
+今日流量不归零  → Docker 部署没设 TZ 环境变量
+
+## 明确不要做的
+
+- 不要把 hub 改成监听 0.0.0.0 或者去开 28080 的防火墙端口。
+- 不要给 agent 写 Docker 部署方案，它没有镜像，也不需要。
+- 不要建议装告警、WebSSH、插件之类的东西，这个项目明确不做这些。
+- 不要在「设置」里填 GitHub 代理，除非确认这台机器真的拉不到 GitHub Release。那个地址返回的
+  字节会被装到每一台节点上并以 root 跑起来。
+```
+
+## 给 AI 读的其它入口
+
+| 地址 | 内容 |
+|---|---|
+| [`llms.txt`](/llms.txt) | 上面这段提示词的纯文本版 |
+| 本站任意页面 | 全部是预渲染的静态 HTML，`curl` 直接拿得到正文，不用执行 JavaScript |

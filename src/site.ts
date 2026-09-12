@@ -1,0 +1,5 @@
+export const REPO = "https://github.com/monitor-probe/monitor"
+export const REPO_AGENT = "https://github.com/monitor-probe/agent"
+export const REPO_THEME = "https://github.com/monitor-probe/monitor-theme-default"
+export const REPO_DOC = "https://github.com/monitor-probe/monitor-document"
+export const SITE = "https://monitor-document.pages.dev"

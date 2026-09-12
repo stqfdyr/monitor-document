@@ -1,0 +1,77 @@
+镜像是 `FROM scratch` 加一个 musl 静态二进制和一份 zoneinfo，约 10 MB，以 uid 65534 运行。
+
+两个地址内容完全一致，同一次构建推上去的：Docker Hub 的 `stqfdyr/monitor`，以及 `ghcr.io/monitor-probe/monitor`。下面统一写前者。
+
+```bash
+docker run -d --name monitor -p 28080:28080 \
+  -v monitor-data:/data -e TZ=Asia/Shanghai \
+  stqfdyr/monitor
+```
+
+首次启动的应急密码在日志里：
+
+```bash
+docker logs monitor | grep Emergency
+```
+
+## compose
+
+```yaml
+services:
+  monitor:
+    image: stqfdyr/monitor
+    container_name: monitor
+    restart: unless-stopped
+    # 127.0.0.1 而不是 0.0.0.0：容器端口只对本机开，域名由反代接进来。
+    ports:
+      - "127.0.0.1:28080:28080"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - monitor-data:/data
+
+volumes:
+  monitor-data:
+```
+
+反代照[反向代理](/install/reverse-proxy)那页配，上游写 `127.0.0.1:28080`。
+
+<Note warn>
+  `TZ` 必须设成 hub 所在的时区。日流量和账单周期按本地日期切换，不设就按 UTC 算，到点不归零，
+  而且没有任何报错。这是这个镜像唯一一个不设就会静默算错的地方。
+</Note>
+
+## 数据
+
+数据库和主题目录都在 `/data`，也就是二进制部署里 `/opt/monitor/data` 的那一份。
+
+挂主机目录代替 named volume 时先把属主改对。镜像里没有 shell，容器也不以 root 运行，
+`mkdir` 和 `chown` 都做不了：
+
+```bash
+sudo mkdir -p /srv/monitor && sudo chown 65534:65534 /srv/monitor
+docker run -d --name monitor -p 127.0.0.1:28080:28080 \
+  -v /srv/monitor:/data -e TZ=Asia/Shanghai stqfdyr/monitor
+```
+
+## 容器里为什么绑通配符
+
+镜像的 `ENTRYPOINT` 不带 `--listen`，用的是二进制自己的默认值 `[::]:28080`——容器里绑回环的话
+`-p` 就映射不进去。
+
+对外的那道闸交给 `-p`：写 `127.0.0.1:28080:28080` 而不是 `28080:28080`，效果和一键脚本装出来的
+一样，端口只在本机可达，公网要经过反代。
+
+## 升级
+
+```bash
+docker pull stqfdyr/monitor
+docker rm -f monitor && docker run -d ...   # 同一条命令，数据在 volume 里
+```
+
+## agent 没有镜像
+
+agent 是一个无运行时依赖、常驻几 MiB 的静态二进制，而它要装的地方通常是资源最少的那批 VPS，
+为它引入一整套容器运行时并不划算。
+
+被监控的机器直接跑[安装命令](/install/agent)即可。

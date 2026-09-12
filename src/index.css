@@ -1,0 +1,212 @@
+/* Scan this app's own source and nothing else. Tailwind's automatic detection
+   walks the whole repository, turning a word in a Rust file or a document into a
+   utility class in the shipped stylesheet: `.filter` and `.transform` appeared
+   because api.rs calls `.filter(...)`. Beyond the wasted bytes, it made the build
+   depend on unrelated files -- an unrelated workflow changed the CSS, and with it
+   the content hash of every asset. */
+@import "tailwindcss" source(none);
+@source "../index.html";
+@source "../src";
+@import "tw-animate-css";
+/* Self-hosted rather than Google Fonts: fonts.googleapis.com is unreachable from
+   mainland China, where most of this audience is. The file carries unicode-range
+   per subset, so a Chinese page fetches only the 48 KB latin one. CJK remains on
+   system faces, a CJK webfont being several MB. */
+@import "@fontsource-variable/inter/wght.css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.18 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0 0);
+  --primary: oklch(0.18 0 0);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.96 0 0);
+  --secondary-foreground: oklch(0.18 0 0);
+  --muted: oklch(0.955 0 0);
+  --muted-foreground: oklch(0.52 0 0);
+  --accent: oklch(0.955 0 0);
+  --accent-foreground: oklch(0.18 0 0);
+  --destructive: oklch(0.3 0 0);
+  --border: oklch(0.9 0 0);
+  --input: oklch(0.9 0 0);
+  --ring: oklch(0.62 0 0);
+  --chart-1: oklch(0.3 0 0);
+  --chart-2: oklch(0.45 0 0);
+  --chart-3: oklch(0.58 0 0);
+  --chart-4: oklch(0.7 0 0);
+  --chart-5: oklch(0.82 0 0);
+  /* Greyscale has no red or amber, so severity is carried by weight: the bar
+     darkens as it fills. */
+  --ok: oklch(0.62 0 0);
+  --warn: oklch(0.44 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.98 0 0);
+  --card: oklch(0.2 0 0);
+  --card-foreground: oklch(0.98 0 0);
+  --popover: oklch(0.2 0 0);
+  --popover-foreground: oklch(0.98 0 0);
+  --primary: oklch(0.92 0 0);
+  --primary-foreground: oklch(0.2 0 0);
+  --secondary: oklch(0.27 0 0);
+  --secondary-foreground: oklch(0.98 0 0);
+  --muted: oklch(0.27 0 0);
+  --muted-foreground: oklch(0.7 0 0);
+  --accent: oklch(0.27 0 0);
+  --accent-foreground: oklch(0.98 0 0);
+  --destructive: oklch(0.95 0 0);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.55 0 0);
+  --chart-1: oklch(0.95 0 0);
+  --chart-2: oklch(0.82 0 0);
+  --chart-3: oklch(0.68 0 0);
+  --chart-4: oklch(0.54 0 0);
+  --chart-5: oklch(0.42 0 0);
+  /* Inverted against the dark ground: the fuller the bar, the brighter. */
+  --ok: oklch(0.62 0 0);
+  --warn: oklch(0.79 0 0);
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC",
+    "Source Han Sans SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  /* Reserve the scrollbar's width on every page: without it, leaving a route
+     whose content exceeds the fold widens the page. */
+  html { scrollbar-gutter: stable; }
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    /* Chrome 123+. Chinese punctuation occupies a full-width cell of its own
+       whitespace; without this a line of 、。， reads as gapped. Ignored
+       elsewhere. */
+    text-spacing-trim: space-first;
+  }
+  /* Anchor links land below the sticky header rather than beneath it. */
+  :target { scroll-margin-top: 5.5rem; }
+  h2, h3 { scroll-margin-top: 5.5rem; }
+}
+
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* ---- prose --------------------------------------------------------------
+   Hand-written rather than @tailwindcss/typography: the plugin ships a full
+   colour theme that would then need overriding token by token, and the set of
+   elements these pages use fits on one screen.
+
+   One rhythm, defined once. Every block clears its own margin and the gap comes
+   from a single rule, so a paragraph, a list, a table, a code block and a callout
+   are all the same distance apart. Setting them per element produces 20px, 24px
+   and 28px gaps between elements at the same level. */
+.prose { @apply text-base leading-[1.75] text-foreground/85; }
+.prose > * { @apply my-0; }
+.prose > * + * { @apply mt-5; }
+
+.prose h2 {
+  @apply mt-14 mb-4 scroll-mt-24 text-2xl font-semibold tracking-tight text-foreground;
+}
+.prose h3 { @apply mt-9 mb-3 text-lg font-semibold tracking-tight text-foreground; }
+.prose h2 + h3 { @apply mt-5; }
+.prose hr { @apply my-12 border-border; }
+
+.prose strong { @apply font-semibold text-foreground; }
+.prose a {
+  @apply font-medium text-foreground underline decoration-border underline-offset-[3px]
+         transition-colors hover:decoration-foreground;
+}
+/* Indicate that the link leaves the site before it is clicked. */
+.prose a[target="_blank"]::after {
+  content: "↗";
+  @apply ml-0.5 inline-block align-baseline text-[0.75em] text-muted-foreground no-underline;
+}
+.prose h2, .prose h3 { @apply relative; }
+
+.prose ul { @apply list-disc space-y-2.5 pl-5 marker:text-muted-foreground; }
+.prose ol { @apply list-decimal space-y-2.5 pl-5 marker:text-muted-foreground; }
+.prose li > ul, .prose li > ol { @apply mt-2.5; }
+.prose blockquote { @apply border-l-2 border-border py-0.5 pl-4 text-muted-foreground; }
+
+.prose table { @apply w-full border-collapse text-[0.9375rem]; }
+.prose thead { @apply border-b border-border; }
+.prose th {
+  @apply px-3 py-2.5 text-left align-bottom font-medium whitespace-nowrap text-muted-foreground;
+}
+.prose td { @apply border-b border-border/60 px-3 py-2.5 align-top; }
+.prose tbody tr:last-child td { @apply border-b-0; }
+/* Tables are the one block that will not reflow; they scroll rather than
+   widening the page. */
+.prose .table-scroll { @apply -mx-1 overflow-x-auto px-1; }
+
+/* Inline code. Fenced blocks are wrapped by CodeBlock and opt out. Filled rather
+   than outlined: a paragraph can carry four in a row, and outlines would read as
+   a row of boxes rather than as prose. */
+.prose :not(pre) > code {
+  @apply rounded-[5px] bg-muted px-[0.4em] py-[0.2em] font-mono text-[0.85em] text-foreground;
+}
+
+/* ---- shiki --------------------------------------------------------------
+   rehype-pretty-code emits both palettes as CSS variables on every token, so the
+   theme switch is a variable swap requiring no second stylesheet. */
+.prose pre {
+  @apply overflow-x-auto rounded-xl border border-border bg-muted/40 py-5
+         font-mono text-[0.9375rem] leading-[1.7];
+}
+/* Reserve the band the language badge occupies; without it a long first line
+   scrolls under the badge. Plain-text blocks have no badge and keep the tighter
+   padding. */
+.prose pre[data-language]:not([data-language="text"]) { @apply pt-8; }
+.prose pre > code { @apply grid; }
+/* Attribute rather than class: rehype-pretty-code marks lines with data-line and
+   assigns no class. The padding sits on the line rather than on <pre> so it
+   survives horizontal scrolling, since padding on the scroll container collapses
+   at the far end. */
+.prose pre > code > [data-line] { @apply px-5; }
+.prose pre > code > [data-highlighted-line] { @apply bg-foreground/[0.06]; }
+.prose pre span { color: var(--shiki-light); }
+.dark .prose pre span { color: var(--shiki-dark); }
+
+/* Sidebar scrollbar: present, but not emphasised. */
+.thin-scroll { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }

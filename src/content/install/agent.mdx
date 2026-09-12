@@ -1,0 +1,65 @@
+只支持 Linux，systemd 与 OpenRC 都行。不提供 Docker 镜像，理由见 [Docker 部署](/install/docker)。
+
+## 单台安装
+
+在面板 **节点 → 添加** 填一个名字，再点这个节点旁边的下载按钮，复制生成的命令：
+
+```bash
+curl -fsSL https://hub.example.com/install.sh | sh -s -- \
+  --server https://hub.example.com --token <token>
+```
+
+以 root 在目标主机执行，几秒钟后节点就会在面板里亮起来。
+
+二进制由 hub 转发（`<hub>/agent/<arch>`），节点不需要能连上 GitHub——能连上 hub 就能装，
+IPv6-only 或者出不去的机器也一样。
+
+## 批量注册
+
+**节点 → 批量添加**开一个一小时的注册窗口。期间下面这条命令在任意机器上跑一次，那台机器就会带着
+自己的 hostname 出现在列表里，各自拿到各自的 token：
+
+```bash
+curl -fsSL https://hub.example.com/install.sh | sh -s -- \
+  --server https://hub.example.com --register <key>
+```
+
+命令里没有任何一台机器的凭证，可以直接进 `for` 循环、ansible 或者开机脚本：
+
+```bash
+for h in node1 node2 node3; do
+  ssh "$h" 'curl -fsSL https://hub.example.com/install.sh | sh -s -- \
+    --server https://hub.example.com --register <key>'
+done
+```
+
+窗口到点自动失效，一个窗口最多注册 100 台。重跑同一条命令不会重复添加，机器上已经有 token 就直接沿用。
+
+<Note>
+  key 泄露的影响范围：在窗口剩下的时间里最多建 100 个节点，每个只能上报它自己那一个节点，
+  读不到已有节点的数据，也改不了设置。代价是面板里多出一批垃圾节点，关掉窗口删掉即可，
+  已经装好的机器不受影响。
+</Note>
+
+## 换 token
+
+**节点 → 重新生成 token**。旧 token 立刻失效，包括已经连着的那条连接：hub 会把这个节点踢下线，
+它拿旧 token 重连会吃到 401。
+
+安装命令随时可以再看一次，token 不是只显示一次。
+
+## 卸载
+
+```bash
+# systemd
+systemctl disable --now monitor-agent
+rm -f /etc/systemd/system/monitor-agent.service && systemctl daemon-reload
+
+# OpenRC
+rc-update del monitor-agent default && rc-service monitor-agent stop
+rm -f /etc/init.d/monitor-agent
+
+rm -f /opt/monitor/monitor-agent /opt/monitor/agent.env
+```
+
+然后在面板里删掉这个节点。

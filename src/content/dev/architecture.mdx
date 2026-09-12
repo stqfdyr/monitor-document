@@ -1,0 +1,165 @@
+```text
+┌─────────────┐  WebSocket / JSON-RPC 2.0  ┌───────────────┐      ┌─────────┐
+│    agent    │ ── Authorization: Bearer ─▶│      hub      │◀──── │ browser │
+│ (Linux VPS) │ ◀────── ping.tasks ─────── │ axum + SQLite │      │  React  │
+└─────────────┘                            └───────────────┘      └─────────┘
+  读 /proc                                    monitor.db          面板 / 状态页
+  不写任何文件                                 后台内置，主题可换
+```
+
+## 三个仓库
+
+| 仓库 | 内容 |
+|---|---|
+| [monitor](https://github.com/monitor-probe/monitor) | hub + 内置后台 + `install.sh` |
+| [agent](https://github.com/monitor-probe/agent) | Linux agent，发布自己的 musl 二进制 |
+| [monitor-theme-default](https://github.com/monitor-probe/monitor-theme-default) | 默认公开页主题。**发布构建产物**，hub 按 sha256 钉住并嵌入 |
+
+agent 拆开是因为部署机器和发布节奏不同；默认主题拆开是为了让主题拥有独立的契约、版本和开发流程。
+
+hub 消费的是主题的构建产物，不编译主题源码。发布的 `theme.tar.gz` 解开就是一个可安装的主题目录，
+所以默认主题和第三方主题走同一套契约。
+
+## 线上协议
+
+WebSocket 上承载 JSON-RPC 2.0 通知：只有 `method` 和 `params`，没有 `id`，不需要响应。一条长连接
+双向都能主动发，报文自带方法名，`curl` 和浏览器控制台就能读。
+
+### agent → hub
+
+| method | params | 何时发 |
+|---|---|---|
+| `hello` | `Facts` | 每次连接建立后一次 |
+| `report` | `Metrics` | 每 `--interval` 秒 |
+| `ping.result` | `{ task_id, latency_ms }`，`-1` 表示连不上 | 每个探测任务按自己的间隔 |
+
+`Facts`：hostname、os、kernel、arch、virt、cpu_name、cpu_cores、mem_total、swap_total、
+disk_total、agent_version、ipv4、ipv6
+
+`Metrics`：
+
+```text
+boot_id  uptime  cpu  load[3]
+mem_total  mem_used  swap_total  swap_used  disk_total  disk_used
+net_rx_total  net_tx_total    ← 内核 lifetime 计数器，hub 负责累加
+net_rx  net_tx                ← 瞬时速率 B/s，agent 自己算差值
+tcp  udp  procs
+```
+
+`boot_id` 来自 `/proc/sys/kernel/random/boot_id`，是 hub 识别 VPS 重启的唯一依据。
+
+### hub → agent
+
+| method | params | 何时发 |
+|---|---|---|
+| `ping.tasks` | `[{ id, target, interval }]` | 连接建立时；面板增删改探测任务时立刻下发 |
+
+agent 收到后保留没变化的任务（同 id、同 target、同 interval），只重启变了的，免得每次下发都把
+所有计时器清零。
+
+### 鉴权
+
+token 走 `Authorization: Bearer` 头，不走 URL query——query 会进反代的 access log。
+
+token 只在握手时校验一次，所以换发 token 时 hub 会主动把那条连接踢掉。
+
+## 请求路径
+
+反代做路径白名单时，需要放行的就是这些。
+
+**agent 侧**
+
+```text
+GET  /api/agent/ws          Bearer token，长连接
+GET  /install.sh            公开，不含密钥
+GET  /agent/{arch}          公开，把 release 二进制从 GitHub 转发给节点
+POST /api/agent/register    公开，凭窗口内有效的注册 key 换一个节点 token
+```
+
+`arch` 只认 `x86_64` 和 `aarch64` 两个字面量。二进制总是走 hub 转发，能连上 hub 就能装，
+IPv6-only 或者出不去的机器不用再找加速站。并发转发数限到 4。
+
+**读取**（登录看全部；未登录且公开页开着，只看公开节点）
+
+```text
+GET /api/me
+GET /api/nodes
+GET /api/nodes/{id}/metrics?hours=N&points=W&series=metrics|ping
+GET /api/ws                 每 2 秒推一次快照
+```
+
+**登录**
+
+```text
+POST /api/auth/login    POST /api/auth/logout
+GET  /api/auth/github   GET  /api/auth/github/callback
+```
+
+**面板**（全部要管理员会话）
+
+```text
+POST   /api/nodes                  PUT /api/nodes/order
+PUT    /api/nodes/{id}             DELETE /api/nodes/{id}
+POST   /api/nodes/{id}/token       PUT /api/nodes/{id}/traffic
+GET    /api/ping-tasks             POST /api/ping-tasks
+DELETE /api/ping-tasks/{id}
+GET    /api/settings               PUT /api/settings
+GET    /api/themes                 POST /api/themes
+DELETE /api/themes/{short}         GET  /api/themes/{short}/preview
+POST   /api/themes/{short}/update
+GET    /api/db                     GET  /api/db/backup
+POST   /api/db/restore             POST /api/db/vacuum
+```
+
+其余路径的处理顺序：
+
+```text
+/api/*           未匹配即 404，不回落 SPA
+/admin, /admin/* 内置后台
+其它             当前磁盘主题；不可用时回落内置默认主题
+```
+
+## 数据模型
+
+八张表。schema 版本记在 SQLite 自带的 `PRAGMA user_version` 里。
+
+| 表 | 作用 |
+|---|---|
+| `setting` | key/value 配置，替代配置文件 |
+| `node` | 节点配置 + agent 上报的静态信息 |
+| `traffic` | **单调递增的流量累计**。1:1 于 node，但每次上报都写 |
+| `metric` | 历史明细，每节点每分钟一行，按保留天数删 |
+| `ping_task` / `ping_node` | 探测任务及其节点分配 |
+| `ping_record` | 探测结果，同样按保留天数删 |
+| `session` | 登录会话，存 sha256，14 天过期 |
+
+`traffic` 单独一张表，是因为它的生命周期和 `node` 完全不同：一个是用户偶尔改一次的配置，一个是
+每秒都在写的热数据。更要紧的是 `metric` 可以随便清理而累计流量不受影响，因为累计值不是从明细
+算出来的。
+
+`metric` 的一行描述的是它前面那一分钟，不是它那一瞬：网速从累计器差值算出，其余字段是分钟内均值。
+
+## 历史查询的两个上限
+
+```text
+hours   窗口宽度   登录 1–2160，匿名 1–168
+points  返回点数   调用方报上自己能画多少点，hub 只往下调，不往上调
+```
+
+两个上限管的是两件事：降采样限响应行数，窗口上限限扫描行数。
+
+`hours=2160` 只返回 320 行，却要读完该节点保留期内的全部记录。主题画的最宽窗口是 7 天，所以
+匿名侧收在 168 小时。
+
+分辨率由屏幕决定：样本装得下就一个不抽稀，装不下才聚合。天花板属于 hub 而不是调用方，因为这条
+路不需要凭证。
+
+## 实时状态放在内存里
+
+每条 agent 连接的出站通道、会话号和最新一次上报都在内存里，hub 重启后会在一个上报周期内重建。
+
+在线判定就是 WebSocket 连着：握手时写入，断开时删掉，一张表一个真相。
+
+连着不等于活着。机器掉进网络黑洞、内核卡死、NAT 表项超时时，TCP 连接会停在半开状态。所以 hub
+每 30 秒发一个 WebSocket Ping，任何入站帧都算活着的证据，连续 120 秒一帧不来就主动断开，agent
+随即重连。判定离线最慢 150 秒。

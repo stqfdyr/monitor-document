@@ -1,0 +1,77 @@
+两条登录通道：本地应急密码，以及可选的 GitHub 单点登录。只用应急密码同样完整可用。
+
+配了 SSO 也把应急密码留着。GitHub 挂了、被墙了、OAuth App 配错了的时候，那是唯一的入口。
+
+## 配置 GitHub 单点登录（可选）
+
+### 1. 在 GitHub 建一个 OAuth App
+
+**Settings → Developer settings → OAuth Apps → New OAuth App**
+
+| 字段 | 填什么 |
+|---|---|
+| Application name | 随意，例如 `monitor` |
+| Homepage URL | `https://hub.example.com` |
+| Authorization callback URL | `https://hub.example.com/api/auth/github/callback` |
+
+<Note warn>
+  回调路径必须精确是 `/api/auth/github/callback`。填错的表现很有迷惑性：GitHub 授权成功，
+  浏览器回到站点看起来一切正常，但就是没登上。
+</Note>
+
+### 2. 填进面板
+
+**安全**页填 Client ID 和 Client Secret，再填**允许登录的 GitHub 用户名**，逗号分隔。
+
+<Note warn>
+  白名单留空表示拒绝所有人，不是放行所有人。配好 SSO 记得填上自己的用户名。
+</Note>
+
+Client Secret 只能写不能读：面板可以设置它，但读不回来，只能拿到一个「已设置」的标记。
+授权只申请 `read:user` scope。
+
+### 3. 改掉应急密码
+
+同一页，最短 12 位，argon2id 哈希存储。
+
+改密码会作废所有登录会话，包括正开着的实时推送流。那条流里带着每个节点的明文 token，
+不断开的话，泄露出去的凭证会比被吊销的那个会话活得更久。
+
+## 应急密码
+
+首次启动时 hub 生成一个 24 字符的随机密码打印到日志，只打印这一次：
+
+```bash
+journalctl -u monitor-hub | grep Emergency     # 二进制部署
+docker logs monitor | grep Emergency           # 容器部署
+```
+
+### 登录限流
+
+同一来源地址 15 分钟内 5 次失败即锁死，成功登录清零。
+
+## 登录不通时怎么排查
+
+先看日志，失败原因都在里面：
+
+```bash
+journalctl -u monitor-hub -f | grep sign-in
+```
+
+| 日志里的话 | 什么意思 |
+|---|---|
+| `no allowed GitHub users configured` | 白名单是空的。**空 = 拒绝所有人** |
+| `GitHub user X is not on the allowed list` | 用户名不在白名单里 |
+| `GitHub returned access_denied` | 在 GitHub 的授权页上点了拒绝 |
+| `state mismatch or missing` | 不是从登录页发起的，或者 state cookie 过期了（10 分钟） |
+| `incorrect_client_credentials` | Client Secret 不对 |
+
+同样的原因也会红字显示在登录页上。
+
+服务端一条日志都没有，只可能是回调路径填错了——那个路径压根没进任何 handler。未匹配的 `/api/`
+返回 404 而不是页面，所以这个错误会立刻现形。
+
+<Note>
+  完整白名单只进日志，不显示在登录页上。任何一个 GitHub 账号都能走完授权拿到那句提示，
+  带上白名单等于把值得钓鱼的那几个名字发给所有人。
+</Note>

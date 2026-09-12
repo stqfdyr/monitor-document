@@ -1,0 +1,91 @@
+## 一键脚本
+
+安装命令在[快速开始](/install/quick-start)。脚本核对 release 的 `sha256sums.txt` 之后才把二进制放进
+`/opt/monitor`，建一个 `monitor` 系统用户，写一个加固过的 systemd 单元，最后打印三种反向代理的配法。
+
+重跑一次就是升级：校验通过才替换，起不来自动回滚到上一版，没写的参数沿用上次的，
+所以升级不会把端口和 `--site` 冲掉。
+
+### 参数
+
+| 参数 | 说明 |
+|---|---|
+| `--port <n>` | 本机监听端口，默认 `28080` |
+| `--site <url>` | 一般不用填，见下面「什么时候需要 `--site`」 |
+| `--uninstall` | 卸载，数据保留在 `/opt/monitor/data` |
+| `--purge` | 卸载并删除数据库 |
+| `--yes` / `-y` | 跳过确认 |
+| `--help` / `-h` | 用法 |
+
+### 目录结构
+
+除了 systemd 单元，其余都在一个目录下：
+
+```text
+/opt/monitor/
+├── monitor-hub          # hub 二进制
+├── monitor-agent        # 这台机器也装了 agent 的话
+├── agent.env            # agent 的 token，0600 root
+└── data/                # 服务唯一可写的目录，0700 monitor
+    ├── monitor.db
+    └── themes/          # 后台装的外部主题
+```
+
+服务以 `monitor` 用户运行，单元里写了 `ReadWritePaths=/opt/monitor/data`，所以它连自己的二进制
+都写不了。
+
+### 常用命令
+
+```bash
+systemctl status monitor-hub
+journalctl -u monitor-hub -f
+journalctl -u monitor-hub | grep Emergency   # 找回首次启动打印的应急密码
+```
+
+## 不用脚本
+
+二进制自己就能跑，不需要任何配置：
+
+```bash
+monitor-hub                    # 监听 [::]:28080，数据库 ./monitor.db
+```
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--listen` | `[::]:28080` | 监听地址。一个 socket 同时收 IPv6 与 IPv4 |
+| `--db` | `monitor.db` | SQLite 路径 |
+| `--site` | 空 | 对外地址，只有个别反代场景需要 |
+| `--themes` | 数据库同级的 `themes/` | 外部主题目录 |
+
+Linux 上一个 v6 socket 通过 v4-mapped 地址同时收两族，双栈机器不用配任何东西；内核禁用了 IPv6 或者
+`bindv6only=1` 时自动退回 `0.0.0.0:28080`。
+
+这件事只影响谁连得上：纯 v4 的 hub 收不到只有 IPv6 的节点，反过来也一样，而且两边都是静默失败——
+节点只会一直重连，两头都没有日志说明原因。
+
+<Note warn>
+  手工部署时记得自己加 `--listen 127.0.0.1:28080`，否则明文端口对外可达，绕过反代就能明文访问面板。
+  一键脚本已经写死了这一条。
+</Note>
+
+## 什么时候需要 `--site`
+
+不带 `--site` 时 hub 不假设自己的地址：面板用浏览器地址栏里的地址拼安装命令，cookie 的 `Secure`
+标志看请求的 `X-Forwarded-Proto`。常规反代不需要填它。
+
+只有两种情况要填：
+
+- 面板域名和节点连接的域名不同，比如走 SSH 隧道进面板。用 `--site` 指定节点可达的 HTTPS 域名
+- 反代不发 `X-Forwarded-Proto`，cookie 拿不到 `Secure`，用 `--site https://...` 强制
+
+<Note>
+  `--site` 不能把 IP 入口变成域名入口。从 IP 或明文地址进面板时，添加节点、批量注册和安装命令
+  都不可用，这道闸不接受绕过。
+</Note>
+
+## 卸载
+
+```bash
+sudo ./install-hub.sh --uninstall   # 保留 /opt/monitor/data
+sudo ./install-hub.sh --purge       # 连数据库一起删
+```
