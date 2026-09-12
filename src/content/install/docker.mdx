@@ -1,7 +1,3 @@
-镜像是 `FROM scratch` 加一个 musl 静态二进制和一份 zoneinfo，约 10 MB，以 uid 65534 运行。
-
-两个地址内容完全一致，同一次构建推上去的：Docker Hub 的 `stqfdyr/monitor`，以及 `ghcr.io/monitor-probe/monitor`。下面统一写前者。
-
 ```bash
 docker run -d --name monitor -p 28080:28080 \
   -v monitor-data:/data -e TZ=Asia/Shanghai \
@@ -45,8 +41,9 @@ volumes:
 
 数据库和主题目录都在 `/data`，也就是二进制部署里 `/opt/monitor/data` 的那一份。
 
-挂主机目录代替 named volume 时先把属主改对。镜像里没有 shell，容器也不以 root 运行，
-`mkdir` 和 `chown` 都做不了：
+从二进制部署迁过来、备份脚本盯着固定路径、或者数据要落在别的盘上，才需要挂主机目录代替
+named volume；其余情况上面那份 compose 就够了。这么挂的话先把属主改对，容器以 uid 65534
+运行，而镜像里没有 shell，`mkdir` 和 `chown` 在容器内都做不了：
 
 ```bash
 sudo mkdir -p /srv/monitor && sudo chown 65534:65534 /srv/monitor
